@@ -11,6 +11,7 @@ pub use self::latin::LatinNormalizer;
 pub use self::lowercase::LowercaseNormalizer;
 use crate::normalizer::nonspacing_mark::NonspacingMarkNormalizer;
 use crate::Token;
+use crate::normalizer::compatibility_decomposition::CompatibilityDecompositionNormalizer;
 
 #[cfg(feature = "chinese")]
 mod chinese;
@@ -20,6 +21,7 @@ mod japanese;
 mod latin;
 mod lowercase;
 mod nonspacing_mark;
+mod compatibility_decomposition; // https://github.com/meilisearch/charabia/issues/139
 
 /// List of [`Normalizer`]s used by [`Normalize::normalize`].
 pub static NORMALIZERS: Lazy<Vec<Box<dyn Normalizer>>> = Lazy::new(|| {
@@ -32,6 +34,7 @@ pub static NORMALIZERS: Lazy<Vec<Box<dyn Normalizer>>> = Lazy::new(|| {
         Box::new(LatinNormalizer),
         Box::new(ControlCharNormalizer),
         Box::new(NonspacingMarkNormalizer),
+        Box::new(CompatibilityDecompositionNormalizer),
     ]
 });
 
