@@ -1,12 +1,8 @@
-use std::borrow::Cow;
-
 // Import `Normalizer` trait.
-use super::{Normalizer, NormalizerOption};
-use crate::detection::{Language, Script};
-use crate::Token;
+use super::{CharNormalizer, CharOrStr};
+use crate::{Token, Script};
 
-use unicode_normalization::UnicodeNormalization;
-use unicode_normalization::{is_nfkd_quick, IsNormalized};
+use unicode_normalization::{is_nfkd, is_nfkd_quick, IsNormalized, UnicodeNormalization};
 
 // Make a small documentation of the specialized Normalizer like below.
 /// Implements an unicode compatibility decomposition () [`Normalizer`] for Unicode.
@@ -14,27 +10,25 @@ use unicode_normalization::{is_nfkd_quick, IsNormalized};
 /// This Normalizer uses [`unicode_normalization`] internally to normalize the provided token.
 pub struct CompatibilityDecompositionNormalizer;
 
-impl Normalizer for CompatibilityDecompositionNormalizer {
-    fn normalize<'o>(
-        &self,
-        mut token: Token<'o>,
-        _options: NormalizerOption,
-    ) -> Box<dyn Iterator<Item = Token<'o>> + 'o> {
-        let new_lemma = match is_nfkd_quick(token.lemma().chars()) {
-            IsNormalized::Yes => String::from(token.lemma()),
-            IsNormalized::No => token.lemma().chars().nfkd().collect::<String>(),
-            IsNormalized::Maybe => token.lemma().chars().nfkd().collect::<String>(),
+impl CharNormalizer for CompatibilityDecompositionNormalizer {
+    fn normalize_char(&self, c: char) -> Option<CharOrStr> {
+        let box_char = Box::new(Some(c).into_iter());
+        let normalized = match is_nfkd_quick(box_char) {
+            IsNormalized::Yes => String::from(c),
+            IsNormalized::No => c.nfkd().collect::<String>(),
+            IsNormalized::Maybe => String::from(c), //c.nfkd().collect::<String>(),
         };
 
-        token.lemma = Cow::Owned(new_lemma);
-
-        // Create an iterator over the normalized token.
-        Box::new(Some(token).into_iter())
+        Some(normalized.into())
     }
 
-    fn should_normalize(&self, script: Script, _language: Option<Language>) -> bool {
-        // apply the normalization only on non-ascii chars.
-        true
+    fn should_normalize(&self, token: &Token) -> bool {
+        
+        // apply the normalization only when needed
+        // @TODO: maybe we need to apply the composition on other scripts/languages too?
+        matches!(token.script, Script::Latin | Script::Cyrillic | Script::Greek | Script::Georgian)
+            && !token.lemma().is_ascii()
+            && !is_nfkd(token.lemma())
     }
 }
 
@@ -50,21 +44,41 @@ mod test {
     use std::borrow::Cow::Owned;
 
     use crate::normalizer::test::test_normalizer;
+    use crate::normalizer::{Normalizer, NormalizerOption};
 
     // base tokens to normalize.
     fn tokens() -> Vec<Token<'static>> {
         vec![
             Token {
-                lemma: Owned("PascalCase".to_string()),
-                char_end: 10,
+                // 1234
+                lemma: Owned("①②③④".to_string()),
+                char_end: 4,
+                byte_end: 12,
+                script: Script::Latin,
+                ..Default::default()
+            },
+            Token {
+                // Both \u212B (Å) and \u00C5 (Å) should be decomposed to
+                // A+\030A (Å)
+                lemma: Owned("Å Å Å".to_string()),
+                char_end: 6,
                 byte_end: 10,
                 script: Script::Latin,
                 ..Default::default()
             },
             Token {
-                lemma: Owned("ПаскальКейс".to_string()),
-                char_end: 11,
-                byte_end: 22,
+                // decomposes é (\u00e9) to é (e + \u0301)
+                lemma: Owned("élégant".to_string()),
+                char_end: 7,
+                byte_end: 9,
+                script: Script::Latin,
+                ..Default::default()
+            },
+            Token {
+                // decomposes ﬁ (\ufb01) to fi (\u0066 + \u0069)
+                lemma: Owned("ﬁ".to_string()),
+                char_end: 1,
+                byte_end: 3,
                 script: Script::Latin,
                 ..Default::default()
             },
@@ -75,38 +89,69 @@ mod test {
     fn normalizer_result() -> Vec<Token<'static>> {
         vec![
             Token {
-                // lowercased
-                lemma: Owned("pascalcase".to_string()),
-                char_end: 10,
-                byte_end: 10,
+                // 1234
+                lemma: Owned("1234".to_string()),
+                char_end: 4,
+                byte_end: 4,
                 script: Script::Latin,
                 ..Default::default()
             },
             Token {
-                // lowercased
-                lemma: Owned("паскалькейс".to_string()),
-                char_end: 11,
-                byte_end: 22,
+                // Both \u212B (Å) and \u00C5 (Å) should be decomposed to
+                // A+\030A (Å)
+                lemma: Owned("Å Å Å".to_string()),
+                char_end: 8,
+                byte_end: 11,
+                script: Script::Latin,
+                ..Default::default()
+            },
+            Token {
+                // decomposes "é" (\u00e9) to "é" (e + \u0301)
+                lemma: Owned("élégant".to_string()),
+                char_end: 9,
+                byte_end: 11,
+                script: Script::Latin,
+                ..Default::default()
+            },
+            Token {
+                // decomposes ﬁ (\ufb01) to fi (\u0066 + \u0069)
+                lemma: Owned("fi".to_string()),
+                char_end: 2,
+                byte_end: 2,
                 script: Script::Latin,
                 ..Default::default()
             },
         ]
     }
 
-    // expected result of the complete Normalizer pieline.
+    // expected result of the complete Normalizer pipeline.
     fn normalized_tokens() -> Vec<Token<'static>> {
         vec![
             Token {
-                lemma: Owned("pascalcase".to_string()),
-                char_end: 10,
-                byte_end: 10,
+                lemma: Owned("1234".to_string()),
+                char_end: 4,
+                byte_end: 4,
                 script: Script::Latin,
                 ..Default::default()
             },
             Token {
-                lemma: Owned("paskal'keis".to_string()),
-                char_end: 11,
-                byte_end: 22,
+                lemma: Owned("a a a".to_string()),
+                char_end: 5,
+                byte_end: 5,
+                script: Script::Latin,
+                ..Default::default()
+            },
+            Token {
+                lemma: Owned("elegant".to_string()),
+                char_end: 7,
+                byte_end: 7,
+                script: Script::Latin,
+                ..Default::default()
+            },
+            Token {
+                lemma: Owned("fi".to_string()),
+                char_end: 2,
+                byte_end: 2,
                 script: Script::Latin,
                 ..Default::default()
             },
